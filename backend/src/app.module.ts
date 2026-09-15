@@ -13,6 +13,8 @@ import { DiagnosticOrder } from './modules/diagnostics/entities/diagnostic-order
 import { DiagnosticResult } from './modules/diagnostics/entities/diagnostic-result.entity';
 import { AuditLog } from './modules/audit-log/entities/audit-log.entity';
 
+import { AppController } from './app.controller';
+
 // Modules
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -39,19 +41,16 @@ import { RedisService } from './common/services/redis.service';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
+        const dbUrl = configService.get<string>('DATABASE_URL');
         const dbHost = configService.get<string>('DB_HOST', 'localhost');
         const isCloudDb =
+          (dbUrl && (dbUrl.includes('neon.tech') || dbUrl.includes('aws') || dbUrl.includes('sslmode=require'))) ||
           dbHost.includes('neon.tech') ||
           dbHost.includes('aws') ||
           configService.get('DB_SSL') === 'true';
 
-        return {
-          type: 'postgres',
-          host: dbHost,
-          port: configService.get<number>('DB_PORT', 5432),
-          username: configService.get<string>('DB_USER', 'caresync'),
-          password: configService.get<string>('DB_PASSWORD', 'caresync_secure_password_2026'),
-          database: configService.get<string>('DB_NAME', 'caresync_db'),
+        const baseConfig = {
+          type: 'postgres' as const,
           ssl: isCloudDb ? { rejectUnauthorized: false } : false,
           entities: [
             User,
@@ -68,6 +67,22 @@ import { RedisService } from './common/services/redis.service';
           retryAttempts: 3,
           retryDelay: 1000,
         };
+
+        if (dbUrl) {
+          return {
+            ...baseConfig,
+            url: dbUrl,
+          };
+        }
+
+        return {
+          ...baseConfig,
+          host: dbHost,
+          port: configService.get<number>('DB_PORT', 5432),
+          username: configService.get<string>('DB_USER', 'caresync'),
+          password: configService.get<string>('DB_PASSWORD', 'caresync_secure_password_2026'),
+          database: configService.get<string>('DB_NAME', 'caresync_db'),
+        };
       },
     }),
     AuthModule,
@@ -78,6 +93,7 @@ import { RedisService } from './common/services/redis.service';
     DiagnosticsModule,
     AuditLogModule,
   ],
+  controllers: [AppController],
   providers: [
     RedisService,
     {
