@@ -21,8 +21,13 @@ export class PatientsService {
   private async generateMrn(): Promise<string> {
     const year = new Date().getFullYear();
     const count = await this.patientRepository.count();
-    const sequence = String(count + 1).padStart(6, '0');
-    return `CS-${year}-${sequence}`;
+    let sequenceNumber = count + 1;
+    let candidate = `CS-${year}-${String(sequenceNumber).padStart(6, '0')}`;
+    while (await this.patientRepository.findOne({ where: { mrn: candidate } })) {
+      sequenceNumber++;
+      candidate = `CS-${year}-${String(sequenceNumber).padStart(6, '0')}`;
+    }
+    return candidate;
   }
 
   async create(dto: CreatePatientDto) {
