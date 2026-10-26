@@ -72,7 +72,17 @@ export interface CreateAppointmentInput {
 }
 
 export type DiagnosticPriority = 'ROUTINE' | 'URGENT' | 'STAT';
-export type DiagnosticStatus = 'PENDING' | 'COLLECTED' | 'PROCESSING' | 'VERIFIED' | 'COMPLETED';
+export type DiagnosticStatus =
+  | 'ORDERED'
+  | 'PENDING'
+  | 'COLLECTED'
+  | 'PROCESSING'
+  | 'IN_ANALYSIS'
+  | 'RESULTED'
+  | 'VERIFIED'
+  | 'REVIEWED'
+  | 'COMPLETED'
+  | 'CANCELLED';
 
 export interface LabResultItem {
   parameter: string;
@@ -81,6 +91,16 @@ export interface LabResultItem {
   referenceRange: string;
   isAbnormal: boolean;
   isPanicValue?: boolean;
+}
+
+export interface CreateDiagnosticOrderInput {
+  patientId: string;
+  testName: string;
+  testCategory?: string;
+  priority?: DiagnosticPriority;
+  clinicalIndication?: string;
+  physicianId?: string;
+  physicianName?: string;
 }
 
 export interface LabOrder {
@@ -95,7 +115,14 @@ export interface LabOrder {
   status: DiagnosticStatus;
   requestedBy: string;
   requestedAt: string;
+  clinicalIndication?: string;
   results?: LabResultItem[];
+  resultSummary?: string;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  physicianReviewNotes?: string;
 }
 
 export interface AuditLogEntry {
@@ -142,5 +169,198 @@ export interface PatientMedication {
   startDate: string;
   instructions: string;
   status: 'Active' | 'Discontinued' | 'As Needed';
+}
+
+export interface VitalSigns {
+  bloodPressureSystolic?: number;
+  bloodPressureDiastolic?: number;
+  heartRate?: number;
+  respiratoryRate?: number;
+  temperatureCelsius?: number;
+  oxygenSaturation?: number;
+  weightKg?: number;
+  recordedAt?: string;
+  notes?: string;
+}
+
+export type ConsultationStatus = 'DRAFT' | 'FINALIZED';
+
+export interface ConsultationCorrection {
+  id: string;
+  consultationId: string;
+  amendedBy: string;
+  amendedByName: string;
+  amendmentReason: string;
+  previousSnapshot: {
+    chiefComplaint: string;
+    physicalExamination?: string;
+    primaryDiagnosisDescription: string;
+    primaryDiagnosisCode?: string;
+    treatmentPlan: string;
+    vitalSigns?: VitalSigns;
+  };
+  updatedFields: {
+    chiefComplaint: string;
+    physicalExamination?: string;
+    primaryDiagnosisDescription: string;
+    primaryDiagnosisCode?: string;
+    treatmentPlan: string;
+    vitalSigns?: VitalSigns;
+  };
+  createdAt: string;
+}
+
+export interface CreateCorrectionInput {
+  consultationId: string;
+  amendmentReason: string;
+  chiefComplaint: string;
+  physicalExamination?: string;
+  primaryDiagnosisDescription: string;
+  primaryDiagnosisCode?: string;
+  treatmentPlan: string;
+  vitalSigns?: VitalSigns;
+  amendedBy?: string;
+  amendedByName?: string;
+}
+
+export interface Consultation {
+  id: string;
+  patientId: string;
+  physicianId: string;
+  physicianName?: string;
+  appointmentId?: string;
+  chiefComplaint: string;
+  vitalSigns?: VitalSigns;
+  physicalExamination?: string;
+  primaryDiagnosisDescription: string;
+  primaryDiagnosisCode?: string;
+  treatmentPlan: string;
+  status: ConsultationStatus;
+  finalizedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+  corrections?: ConsultationCorrection[];
+}
+
+export interface CreateConsultationInput {
+  patientId: string;
+  appointmentId?: string;
+  physicianId?: string;
+  physicianName?: string;
+  chiefComplaint: string;
+  vitalSigns?: VitalSigns;
+  physicalExamination?: string;
+  primaryDiagnosisDescription: string;
+  primaryDiagnosisCode?: string;
+  treatmentPlan: string;
+  status?: ConsultationStatus;
+}
+
+export interface CreatePrescriptionInput {
+  patientId: string;
+  name: string;
+  dosage: string;
+  frequency: string;
+  prescribedBy: string;
+  instructions: string;
+  duration?: string;
+  refills?: number;
+  startDate?: string;
+}
+
+export interface DischargeSummary {
+  patientId: string;
+  dischargedAt: string;
+  dischargedBy: string;
+  disposition: 'Home / Self-Care' | 'Specialist Referral' | 'Transfer to Tertiary Facility' | 'Home Health Care' | 'Routine Outpatient Release';
+  dischargeNotes: string;
+  followUpInstructions: string;
+  reconciliationCompleted: boolean;
+}
+
+export type RoomWing = 'Outpatient Clinic' | 'Cardiology & Specialty' | 'Diagnostic Laboratory';
+export type RoomStatus = 'AVAILABLE' | 'IN_USE' | 'SANITIZING' | 'MAINTENANCE' | 'STAT_EMERGENCY';
+export type RoomType = 'Examination Suite' | 'Consultation Room' | 'STAT Biomarkers Bench' | 'Procedure Suite' | 'Triage Bay';
+
+export interface HospitalRoom {
+  id: string;
+  roomNumber: string;
+  wing: RoomWing;
+  status: RoomStatus;
+  roomType: RoomType;
+  floor: string;
+  bedCount: number;
+  bedType?: string;
+  assignedDoctor?: string;
+  assignedPatient?: string;
+  patientId?: string;
+  mrn?: string;
+  reason?: string;
+  elapsedMinutes?: number;
+  expectedDurationMinutes?: number;
+  equipment?: string[];
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface CreateRoomInput {
+  roomNumber: string;
+  wing: RoomWing;
+  roomType: RoomType;
+  floor?: string;
+  bedCount?: number;
+  bedType?: string;
+  equipment?: string[];
+  status?: RoomStatus;
+  notes?: string;
+}
+
+export interface UpdateRoomInput {
+  id: string;
+  roomNumber?: string;
+  wing?: RoomWing;
+  status?: RoomStatus;
+  roomType?: RoomType;
+  floor?: string;
+  bedCount?: number;
+  bedType?: string;
+  equipment?: string[];
+  assignedDoctor?: string;
+  assignedPatient?: string;
+  patientId?: string;
+  mrn?: string;
+  reason?: string;
+  elapsedMinutes?: number;
+  expectedDurationMinutes?: number;
+  notes?: string;
+}
+
+export type StaffRole = 'PHYSICIAN' | 'RECEPTIONIST' | 'LABORATORY_USER' | 'ADMINISTRATOR';
+
+export interface StaffAccount {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  role: StaffRole;
+  department: string;
+  licenseNumber?: string;
+  isActive: boolean;
+  sessionLocked: boolean;
+  lastActiveAt?: string;
+  revokedAt?: string;
+  revokedReason?: string;
+  createdAt: string;
+}
+
+export interface CreateStaffAccountInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password?: string;
+  role: StaffRole;
+  department: string;
+  licenseNumber?: string;
 }
 

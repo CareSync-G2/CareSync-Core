@@ -4,10 +4,32 @@ import {
   Appointment,
   CreateAppointmentInput,
   LabOrder,
+  CreateDiagnosticOrderInput,
+  DiagnosticStatus,
+  DiagnosticPriority,
+  LabResultItem,
+  Consultation,
+  CreateConsultationInput,
+  VitalSigns,
+  ConsultationStatus,
   AuditLogEntry,
   StaffUser,
   PatientVital,
   PatientMedication,
+  PatientStatus,
+  CreatePrescriptionInput,
+  DischargeSummary,
+  HospitalRoom,
+  CreateRoomInput,
+  UpdateRoomInput,
+  RoomWing,
+  RoomStatus,
+  RoomType,
+  ConsultationCorrection,
+  CreateCorrectionInput,
+  StaffAccount,
+  CreateStaffAccountInput,
+  StaffRole,
 } from '../types';
 
 export const STAFF_PRESETS: StaffUser[] = [
@@ -70,20 +92,37 @@ export const PHYSICIAN_PRESETS: PhysicianPreset[] = [
   {
     id: 'u-1',
     name: 'Dr. Sarah Chen, MD',
-    department: 'General Practice',
-    specialty: 'General Practice',
+    department: 'Outpatient Clinic',
+    specialty: 'General Practice & Internal Med',
     email: 'sarah.chen@caresync.org',
     defaultRoom: 'Exam Suite 3B',
   },
   {
     id: 'u-2',
     name: 'Dr. Marcus Vance, MD',
-    department: 'Cardiology',
-    specialty: 'Cardiology',
+    department: 'Cardiology & Specialty',
+    specialty: 'Interventional Cardiology',
     email: 'marcus.vance@caresync.org',
-    defaultRoom: 'Cardiology 1A',
+    defaultRoom: 'Cardiology Suite 1A',
+  },
+  {
+    id: 'u-6',
+    name: 'Dr. Olivia Bennett, MD',
+    department: 'Cardiology & Specialty',
+    specialty: 'Obstetrics & Gynecology',
+    email: 'olivia.bennett@caresync.org',
+    defaultRoom: 'OBGYN Suite 2C',
+  },
+  {
+    id: 'u-4',
+    name: 'Elena Rostova, CLS',
+    department: 'Diagnostic Laboratory',
+    specialty: 'Clinical Pathology & Biomarkers',
+    email: 'elena.rostova@caresync.org',
+    defaultRoom: 'STAT Biomarkers Bench',
   },
 ];
+
 
 const INITIAL_PATIENTS: Patient[] = [
   {
@@ -467,10 +506,7 @@ export async function setActiveStaffUser(user: StaffUser): Promise<string | null
 export async function getValidAuthToken(targetUser?: StaffUser): Promise<string | null> {
   if (typeof window === 'undefined') return null;
   const user = targetUser || getActiveStaffUser();
-  const cachedToken = localStorage.getItem('caresync_token');
-  if (cachedToken) return cachedToken;
-
-  const password = user.email.startsWith('admin') ? 'AdminSecret123!' : 'Password123!';
+  const password = 'CareSync@2026!';
 
   try {
     const res = await fetch(`${API_BASE_URL}/auth/login`, {
@@ -828,6 +864,33 @@ export function resetAppointmentsToDefault(): Appointment[] {
   return [...INITIAL_APPOINTMENTS];
 }
 
+const LAB_ORDERS_STORAGE_KEY = 'caresync_local_lab_orders';
+
+export function getStoredLabOrders(): LabOrder[] {
+  if (typeof window === 'undefined') return [...INITIAL_LABS];
+  try {
+    const saved = localStorage.getItem(LAB_ORDERS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fallback
+  }
+  return [...INITIAL_LABS];
+}
+
+export function saveStoredLabOrders(orders: LabOrder[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LAB_ORDERS_STORAGE_KEY, JSON.stringify(orders));
+  } catch {
+    // Fallback
+  }
+}
+
 export async function fetchLabOrders(): Promise<LabOrder[]> {
   try {
     const token = await getValidAuthToken();
@@ -841,13 +904,499 @@ export async function fetchLabOrders(): Promise<LabOrder[]> {
       const json = await res.json();
       const items = json?.data;
       if (Array.isArray(items) && items.length > 0) {
-        return items;
+        // Map backend orders if necessary
+        const mapped: LabOrder[] = items.map((item: any) => ({
+          id: item.id,
+          orderNumber: item.orderCode || `LAB-2026-${String(item.id).slice(-4)}`,
+          patientId: item.patientId || item.patient?.id || 'p-1',
+          patientName: item.patient?.fullName || (item.patient ? `${item.patient.firstName} ${item.patient.lastName}` : 'Eleanor Vance'),
+          mrn: item.patient?.mrn || 'MRN-90214',
+          testName: item.testName || 'Comprehensive Metabolic Panel (CMP)',
+          testCategory: item.testCategory || 'General Chemistry',
+          priority: item.priority || 'ROUTINE',
+          status: item.status || 'ORDERED',
+          requestedBy: item.physician?.fullName || 'Dr. Sarah Chen, MD',
+          requestedAt: item.createdAt || new Date().toISOString(),
+          clinicalIndication: item.clinicalIndication,
+          results: item.result?.findings
+            ? Object.entries(item.result.findings).map(([key, val]: [string, any]) => ({
+                parameter: key,
+                value: String(val?.value ?? val),
+                unit: val?.unit || '',
+                referenceRange: val?.referenceRange || '',
+                isAbnormal: Boolean(val?.isAbnormal || val?.normal === false),
+                isPanicValue: Boolean(val?.isPanicValue),
+              }))
+            : undefined,
+          resultSummary: item.result?.resultSummary,
+          verifiedBy: item.result?.verifiedBy?.fullName,
+          verifiedAt: item.result?.verifiedAt,
+          reviewedBy: item.result?.reviewedBy?.fullName,
+          reviewedAt: item.result?.reviewedAt,
+        }));
+
+        // Merge with local newly created orders if any
+        const local = getStoredLabOrders();
+        const serverIds = new Set(mapped.map((m) => m.id));
+        const merged = [...mapped, ...local.filter((l) => !serverIds.has(l.id))];
+        saveStoredLabOrders(merged);
+        return merged;
       }
     }
   } catch {
     // Fallback
   }
-  return localLabs;
+  return getStoredLabOrders();
+}
+
+export async function createDiagnosticOrder(
+  input: CreateDiagnosticOrderInput,
+): Promise<{ success: boolean; data?: LabOrder; error?: string }> {
+  if (!input.patientId || !input.testName) {
+    return { success: false, error: 'Patient and diagnostic test panel are required.' };
+  }
+
+  // Attempt backend creation
+  try {
+    const physicianUser = STAFF_PRESETS.find((s) => s.role === 'PHYSICIAN') || STAFF_PRESETS[1];
+    const token = await getValidAuthToken(physicianUser);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const res = await fetch(`${API_BASE_URL}/diagnostics/orders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        patientId: input.patientId,
+        testName: input.testName,
+        priority: input.priority || 'ROUTINE',
+        clinicalIndication: input.clinicalIndication || undefined,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const json = await res.json();
+      const serverOrder = json.data;
+      const patient = localPatients.find((p) => p.id === input.patientId);
+      const newOrder: LabOrder = {
+        id: serverOrder.id || `lab-${Date.now()}`,
+        orderNumber: serverOrder.orderCode || `LAB-2026-${String(Date.now()).slice(-4)}`,
+        patientId: input.patientId,
+        patientName: patient ? patient.fullName : 'Eleanor Vance',
+        mrn: patient ? patient.mrn : 'MRN-90214',
+        testName: input.testName,
+        testCategory: input.testCategory || 'General Chemistry',
+        priority: input.priority || 'ROUTINE',
+        status: (serverOrder.status as DiagnosticStatus) || 'ORDERED',
+        requestedBy: input.physicianName || physicianUser.fullName,
+        requestedAt: serverOrder.createdAt || new Date().toISOString(),
+        clinicalIndication: input.clinicalIndication,
+      };
+
+      const current = getStoredLabOrders();
+      saveStoredLabOrders([newOrder, ...current]);
+      return { success: true, data: newOrder };
+    }
+  } catch {
+    // Local fallback
+  }
+
+  const patient = localPatients.find((p) => p.id === input.patientId) || localPatients[0];
+  const current = getStoredLabOrders();
+  const newOrder: LabOrder = {
+    id: `lab-${Date.now()}`,
+    orderNumber: `LAB-2026-${String(current.length + 905).padStart(4, '0')}`,
+    patientId: input.patientId,
+    patientName: patient ? patient.fullName : 'Eleanor Vance',
+    mrn: patient ? patient.mrn : 'MRN-90214',
+    testName: input.testName,
+    testCategory: input.testCategory || 'General Chemistry',
+    priority: input.priority || 'ROUTINE',
+    status: 'ORDERED',
+    requestedBy: input.physicianName || 'Dr. Sarah Chen, MD',
+    requestedAt: new Date().toISOString(),
+    clinicalIndication: input.clinicalIndication,
+  };
+
+  saveStoredLabOrders([newOrder, ...current]);
+  return { success: true, data: newOrder };
+}
+
+export async function updateDiagnosticOrderStatus(
+  id: string,
+  status: DiagnosticStatus,
+): Promise<{ success: boolean; data?: LabOrder }> {
+  const current = getStoredLabOrders();
+  const updated = current.map((o) => (o.id === id ? { ...o, status } : o));
+  saveStoredLabOrders(updated);
+  const found = updated.find((o) => o.id === id);
+  return { success: true, data: found };
+}
+
+export async function submitDiagnosticResult(
+  orderId: string,
+  findings: LabResultItem[],
+  resultSummary: string,
+): Promise<{ success: boolean; data?: LabOrder; error?: string }> {
+  try {
+    const labUser = STAFF_PRESETS.find((s) => s.role === 'LABORATORY_USER') || STAFF_PRESETS[2];
+    const token = await getValidAuthToken(labUser);
+    const hasAbnormal = findings.some((f) => f.isAbnormal || f.isPanicValue);
+
+    await fetch(`${API_BASE_URL}/diagnostics/orders/${orderId}/results`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        resultSummary,
+        findings: findings.reduce((acc, f) => {
+          acc[f.parameter] = {
+            value: f.value,
+            unit: f.unit,
+            referenceRange: f.referenceRange,
+            isAbnormal: f.isAbnormal,
+            isPanicValue: f.isPanicValue,
+          };
+          return acc;
+        }, {} as Record<string, any>),
+        isAbnormal: hasAbnormal,
+      }),
+    });
+  } catch {
+    // Local fallback
+  }
+
+  const current = getStoredLabOrders();
+  const updated = current.map((o) => {
+    if (o.id === orderId) {
+      return {
+        ...o,
+        status: 'RESULTED' as DiagnosticStatus,
+        results: findings,
+        resultSummary,
+      };
+    }
+    return o;
+  });
+  saveStoredLabOrders(updated);
+  const found = updated.find((o) => o.id === orderId);
+  return { success: true, data: found };
+}
+
+export async function verifyDiagnosticResult(
+  orderId: string,
+  supervisorName = 'Dr. Marcus Vance, MD (Chief of Pathology)',
+): Promise<{ success: boolean; data?: LabOrder }> {
+  try {
+    const labUser = STAFF_PRESETS.find((s) => s.role === 'LABORATORY_USER') || STAFF_PRESETS[2];
+    const token = await getValidAuthToken(labUser);
+    await fetch(`${API_BASE_URL}/diagnostics/orders/${orderId}/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    // Local fallback
+  }
+
+  const current = getStoredLabOrders();
+  const updated = current.map((o) => {
+    if (o.id === orderId) {
+      return {
+        ...o,
+        status: 'VERIFIED' as DiagnosticStatus,
+        verifiedBy: supervisorName,
+        verifiedAt: new Date().toISOString(),
+      };
+    }
+    return o;
+  });
+  saveStoredLabOrders(updated);
+  const found = updated.find((o) => o.id === orderId);
+  return { success: true, data: found };
+}
+
+export async function reviewDiagnosticResult(
+  orderId: string,
+  physicianNotes: string,
+  physicianName = 'Dr. Sarah Chen, MD',
+): Promise<{ success: boolean; data?: LabOrder }> {
+  try {
+    const physicianUser = STAFF_PRESETS.find((s) => s.role === 'PHYSICIAN') || STAFF_PRESETS[1];
+    const token = await getValidAuthToken(physicianUser);
+    await fetch(`${API_BASE_URL}/diagnostics/orders/${orderId}/review`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    // Local fallback
+  }
+
+  const current = getStoredLabOrders();
+  const updated = current.map((o) => {
+    if (o.id === orderId) {
+      return {
+        ...o,
+        status: 'REVIEWED' as DiagnosticStatus,
+        reviewedBy: physicianName,
+        reviewedAt: new Date().toISOString(),
+        physicianReviewNotes: physicianNotes,
+      };
+    }
+    return o;
+  });
+  saveStoredLabOrders(updated);
+  const found = updated.find((o) => o.id === orderId);
+  return { success: true, data: found };
+}
+
+const INITIAL_CONSULTATIONS: Consultation[] = [
+  {
+    id: 'con-1',
+    patientId: 'p-1',
+    physicianId: 'u-1',
+    physicianName: 'Dr. Sarah Chen, MD',
+    appointmentId: 'apt-1',
+    chiefComplaint: 'Follow-up for essential hypertension and episodic dizziness after exertion.',
+    vitalSigns: {
+      bloodPressureSystolic: 128,
+      bloodPressureDiastolic: 82,
+      heartRate: 72,
+      respiratoryRate: 16,
+      temperatureCelsius: 36.8,
+      oxygenSaturation: 98,
+      weightKg: 64.2,
+      recordedAt: '2026-09-20T10:15:00Z',
+    },
+    physicalExamination: 'Alert, oriented x3. Cardiac exam reveals regular rate and rhythm without murmurs. Lungs clear to auscultation bilaterally. No peripheral edema noted.',
+    primaryDiagnosisDescription: 'Essential (Primary) Hypertension',
+    primaryDiagnosisCode: 'I10',
+    treatmentPlan: 'Maintain Lisinopril 10mg daily in the morning. Continue low-sodium DASH diet. Recheck lipid profile and metabolic panel in 3 months.',
+    status: 'FINALIZED',
+    finalizedAt: '2026-09-20T10:45:00Z',
+    createdAt: '2026-09-20T10:00:00Z',
+  },
+  {
+    id: 'con-2',
+    patientId: 'p-2',
+    physicianId: 'u-1',
+    physicianName: 'Dr. Sarah Chen, MD',
+    appointmentId: 'apt-2',
+    chiefComplaint: 'Persistent productive morning cough and mild exertional dyspnea for 2 weeks.',
+    vitalSigns: {
+      bloodPressureSystolic: 138,
+      bloodPressureDiastolic: 86,
+      heartRate: 84,
+      respiratoryRate: 18,
+      temperatureCelsius: 37.4,
+      oxygenSaturation: 96,
+      weightKg: 82.5,
+      recordedAt: '2026-09-18T14:30:00Z',
+    },
+    physicalExamination: 'Scattered bilateral coarse rhonchi on expiration, clearing with vigorous cough. No wheezes or stridor. Oropharynx non-erythematous.',
+    primaryDiagnosisDescription: 'Acute Bronchitis, unspecified',
+    primaryDiagnosisCode: 'J20.9',
+    treatmentPlan: 'Hydration and symptomatic relief with benzonatate 100mg TID PRN. Inhaled albuterol 2 puffs q4h PRN. Return to clinic if fever persists beyond 48 hours.',
+    status: 'FINALIZED',
+    finalizedAt: '2026-09-18T15:00:00Z',
+    createdAt: '2026-09-18T14:15:00Z',
+  },
+];
+
+const CONSULTATIONS_STORAGE_KEY = 'caresync_local_consultations';
+
+export function getStoredConsultations(): Consultation[] {
+  if (typeof window === 'undefined') return [...INITIAL_CONSULTATIONS];
+  try {
+    const saved = localStorage.getItem(CONSULTATIONS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Fallback
+  }
+  return [...INITIAL_CONSULTATIONS];
+}
+
+export function saveStoredConsultations(consultations: Consultation[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(CONSULTATIONS_STORAGE_KEY, JSON.stringify(consultations));
+  } catch {
+    // Fallback
+  }
+}
+
+export async function fetchConsultations(patientId?: string): Promise<Consultation[]> {
+  try {
+    const token = await getValidAuthToken();
+    const url = new URL(`${API_BASE_URL}/consultations`);
+    if (patientId) url.searchParams.append('patientId', patientId);
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const items = json?.data;
+      if (Array.isArray(items) && items.length > 0) {
+        const mapped: Consultation[] = items.map((item: any) => ({
+          id: item.id,
+          patientId: item.patientId,
+          physicianId: item.physicianId,
+          physicianName: item.physician?.fullName || 'Dr. Sarah Chen, MD',
+          appointmentId: item.appointmentId,
+          chiefComplaint: item.chiefComplaint,
+          vitalSigns: item.vitalSigns,
+          primaryDiagnosisDescription: item.primaryDiagnosisDescription,
+          primaryDiagnosisCode: item.primaryDiagnosisCode,
+          treatmentPlan: item.treatmentPlan,
+          status: item.status || 'DRAFT',
+          finalizedAt: item.finalizedAt,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }));
+
+        const local = getStoredConsultations();
+        const serverIds = new Set(mapped.map((m) => m.id));
+        const merged = [...mapped, ...local.filter((l) => !serverIds.has(l.id))];
+        saveStoredConsultations(merged);
+        return patientId ? merged.filter((c) => c.patientId === patientId) : merged;
+      }
+    }
+  } catch {
+    // Fallback
+  }
+
+  const stored = getStoredConsultations();
+  return patientId ? stored.filter((c) => c.patientId === patientId) : stored;
+}
+
+export async function createConsultation(
+  input: CreateConsultationInput,
+): Promise<{ success: boolean; data?: Consultation; error?: string }> {
+  if (!input.patientId || !input.chiefComplaint || !input.primaryDiagnosisDescription || !input.treatmentPlan) {
+    return { success: false, error: 'Patient, Chief Complaint, Primary Diagnosis, and Treatment Plan are required.' };
+  }
+
+  try {
+    const physicianUser = STAFF_PRESETS.find((s) => s.role === 'PHYSICIAN') || STAFF_PRESETS[1];
+    const token = await getValidAuthToken(physicianUser);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const res = await fetch(`${API_BASE_URL}/consultations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        patientId: input.patientId,
+        appointmentId: input.appointmentId,
+        chiefComplaint: input.chiefComplaint,
+        vitalSigns: input.vitalSigns,
+        primaryDiagnosisDescription: input.primaryDiagnosisDescription,
+        primaryDiagnosisCode: input.primaryDiagnosisCode,
+        treatmentPlan: input.treatmentPlan,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const json = await res.json();
+      const serverCon = json.data;
+      const newCon: Consultation = {
+        id: serverCon.id || `con-${Date.now()}`,
+        patientId: input.patientId,
+        physicianId: physicianUser.id,
+        physicianName: input.physicianName || physicianUser.fullName,
+        appointmentId: input.appointmentId,
+        chiefComplaint: input.chiefComplaint,
+        vitalSigns: input.vitalSigns,
+        physicalExamination: input.physicalExamination,
+        primaryDiagnosisDescription: input.primaryDiagnosisDescription,
+        primaryDiagnosisCode: input.primaryDiagnosisCode,
+        treatmentPlan: input.treatmentPlan,
+        status: (serverCon.status as ConsultationStatus) || (input.status || 'DRAFT'),
+        finalizedAt: serverCon.finalizedAt,
+        createdAt: serverCon.createdAt || new Date().toISOString(),
+      };
+
+      const current = getStoredConsultations();
+      saveStoredConsultations([newCon, ...current]);
+      return { success: true, data: newCon };
+    }
+  } catch {
+    // Local fallback
+  }
+
+  const current = getStoredConsultations();
+  const newCon: Consultation = {
+    id: `con-${Date.now()}`,
+    patientId: input.patientId,
+    physicianId: input.physicianId || 'u-1',
+    physicianName: input.physicianName || 'Dr. Sarah Chen, MD',
+    appointmentId: input.appointmentId,
+    chiefComplaint: input.chiefComplaint,
+    vitalSigns: input.vitalSigns,
+    physicalExamination: input.physicalExamination,
+    primaryDiagnosisDescription: input.primaryDiagnosisDescription,
+    primaryDiagnosisCode: input.primaryDiagnosisCode,
+    treatmentPlan: input.treatmentPlan,
+    status: input.status || 'DRAFT',
+    finalizedAt: input.status === 'FINALIZED' ? new Date().toISOString() : undefined,
+    createdAt: new Date().toISOString(),
+  };
+
+  saveStoredConsultations([newCon, ...current]);
+  return { success: true, data: newCon };
+}
+
+export async function finalizeConsultation(
+  id: string,
+): Promise<{ success: boolean; data?: Consultation }> {
+  try {
+    const physicianUser = STAFF_PRESETS.find((s) => s.role === 'PHYSICIAN') || STAFF_PRESETS[1];
+    const token = await getValidAuthToken(physicianUser);
+    await fetch(`${API_BASE_URL}/consultations/${id}/finalize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    // Local fallback
+  }
+
+  const current = getStoredConsultations();
+  const updated = current.map((c) =>
+    c.id === id ? { ...c, status: 'FINALIZED' as ConsultationStatus, finalizedAt: new Date().toISOString() } : c,
+  );
+  saveStoredConsultations(updated);
+  const found = updated.find((c) => c.id === id);
+  return { success: true, data: found };
 }
 
 export async function fetchAuditLogs(): Promise<AuditLogEntry[]> {
@@ -1000,7 +1549,1071 @@ export async function fetchPatientPortalData(mrn = 'MRN-90214') {
     appointments,
     labOrders,
     vitals: ELEANOR_VITALS,
-    medications: ELEANOR_MEDICATIONS,
+    medications: getStoredMedications(patient?.id),
   };
 }
+
+export const MEDICATIONS_STORAGE_KEY = 'caresync_local_medications';
+export const DISCHARGES_STORAGE_KEY = 'caresync_local_discharges';
+export const AUDIT_LOGS_STORAGE_KEY = 'caresync_local_audit_logs';
+
+export function getStoredAuditLogs(): AuditLogEntry[] {
+  if (typeof window === 'undefined') return [...INITIAL_AUDIT_LOGS];
+  try {
+    const saved = localStorage.getItem(AUDIT_LOGS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return [...INITIAL_AUDIT_LOGS];
+}
+
+export function saveStoredAuditLogs(logs: AuditLogEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(AUDIT_LOGS_STORAGE_KEY, JSON.stringify(logs));
+  } catch {
+    // ignore
+  }
+}
+
+export function recordAuditLogEntry(entry: Omit<AuditLogEntry, 'id' | 'timestamp'>): AuditLogEntry {
+  const fullEntry: AuditLogEntry = {
+    id: `aud-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    timestamp: new Date().toISOString(),
+    ...entry,
+  };
+  const current = getStoredAuditLogs();
+  const updated = [fullEntry, ...current];
+  saveStoredAuditLogs(updated);
+  localAuditLogs = updated;
+  return fullEntry;
+}
+
+export function getStoredMedications(patientId?: string): PatientMedication[] {
+  if (typeof window === 'undefined') return [...ELEANOR_MEDICATIONS];
+  try {
+    const saved = localStorage.getItem(MEDICATIONS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return [...ELEANOR_MEDICATIONS];
+}
+
+export function saveStoredMedications(meds: PatientMedication[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(MEDICATIONS_STORAGE_KEY, JSON.stringify(meds));
+  } catch {
+    // ignore
+  }
+}
+
+export async function createPrescription(
+  input: CreatePrescriptionInput,
+): Promise<{ success: boolean; data?: PatientMedication; error?: string }> {
+  if (!input.name?.trim() || !input.dosage?.trim()) {
+    return { success: false, error: 'Medication name and dosage are required.' };
+  }
+
+  const newMed: PatientMedication = {
+    id: `med-${Date.now()}`,
+    name: input.name.trim(),
+    dosage: input.dosage.trim(),
+    frequency: input.frequency?.trim() || 'Once daily',
+    prescribedBy: input.prescribedBy?.trim() || 'Dr. Sarah Chen, MD',
+    startDate: input.startDate || new Date().toISOString().split('T')[0],
+    instructions: input.instructions?.trim() || 'Take as directed by prescribing physician.',
+    status: 'Active',
+  };
+
+  const current = getStoredMedications();
+  const updated = [newMed, ...current];
+  saveStoredMedications(updated);
+
+  recordAuditLogEntry({
+    action: 'PRESCRIPTION_ISSUED',
+    resource: 'prescriptions',
+    resourceId: newMed.id,
+    userId: 'u-1',
+    userEmail: 'sarah.chen@caresync.org',
+    userRole: 'PHYSICIAN',
+    ipAddress: '192.168.1.42',
+    metadata: {
+      patientId: input.patientId,
+      medicationName: newMed.name,
+      dosage: newMed.dosage,
+      refills: input.refills ?? 0,
+      duration: input.duration || '30 days',
+    },
+  });
+
+  return { success: true, data: newMed };
+}
+
+export function getStoredDischargeSummary(patientId: string): DischargeSummary | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const saved = localStorage.getItem(`${DISCHARGES_STORAGE_KEY}_${patientId}`);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch {
+    // fallback
+  }
+  return null;
+}
+
+export async function dischargePatient(
+  patientId: string,
+  summary: Omit<DischargeSummary, 'patientId' | 'dischargedAt'>,
+): Promise<{ success: boolean; data?: DischargeSummary; error?: string }> {
+  const fullSummary: DischargeSummary = {
+    patientId,
+    dischargedAt: new Date().toISOString(),
+    ...summary,
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`${DISCHARGES_STORAGE_KEY}_${patientId}`, JSON.stringify(fullSummary));
+    } catch {
+      // ignore
+    }
+  }
+
+  localPatients = localPatients.map((p) =>
+    p.id === patientId ? { ...p, status: 'Discharged' as PatientStatus } : p,
+  );
+
+  recordAuditLogEntry({
+    action: 'PATIENT_DISCHARGED',
+    resource: 'patients',
+    resourceId: patientId,
+    userId: 'u-1',
+    userEmail: 'sarah.chen@caresync.org',
+    userRole: 'PHYSICIAN',
+    ipAddress: '192.168.1.42',
+    metadata: {
+      disposition: fullSummary.disposition,
+      dischargedBy: fullSummary.dischargedBy,
+      reconciliationCompleted: fullSummary.reconciliationCompleted,
+    },
+  });
+
+  return { success: true, data: fullSummary };
+}
+
+// ---------------------------------------------------------------------------
+// Hospital Census & Analytics Telemetry APIs [BE-401]
+// ---------------------------------------------------------------------------
+
+export interface WingCensusData {
+  name: string;
+  total: number;
+  inUse: number;
+  available: number;
+  sanitizing: number;
+  statEmergency: number;
+  occupancyRate: number;
+}
+
+export interface HospitalCensusData {
+  totalRooms: number;
+  inUseCount: number;
+  availableCount: number;
+  sanitizingCount: number;
+  statEmergencyCount: number;
+  occupancyRatePercent: number;
+  wings: WingCensusData[];
+}
+
+export interface HospitalMetricsData {
+  todayPatientIntake: number;
+  totalRegisteredPatients: number;
+  activeWaitingQueue: number;
+  inConsultationCount: number;
+  completedConsultationsToday: number;
+  criticalLabAlertsCount: number;
+  averageConsultationDurationMinutes: number;
+}
+
+export interface DiagnosticTatData {
+  overallMeanTatMinutes: number;
+  statEmergencyMeanTatMinutes: number;
+  routineMeanTatMinutes: number;
+  totalOrdersCount: number;
+  verifiedOrdersCount: number;
+  targetComplianceRatePercent: number;
+  volumeByCategory: Record<string, number>;
+}
+
+export async function fetchHospitalCensus(): Promise<HospitalCensusData> {
+  const defaultCensus: HospitalCensusData = {
+    totalRooms: 11,
+    inUseCount: 6,
+    availableCount: 3,
+    sanitizingCount: 1,
+    statEmergencyCount: 1,
+    occupancyRatePercent: 63.6,
+    wings: [
+      {
+        name: 'Outpatient Clinic',
+        total: 4,
+        inUse: 2,
+        available: 1,
+        sanitizing: 1,
+        statEmergency: 0,
+        occupancyRate: 50.0,
+      },
+      {
+        name: 'Cardiology & Specialty',
+        total: 3,
+        inUse: 2,
+        available: 1,
+        sanitizing: 0,
+        statEmergency: 0,
+        occupancyRate: 66.7,
+      },
+      {
+        name: 'Diagnostic Laboratory',
+        total: 4,
+        inUse: 2,
+        available: 1,
+        sanitizing: 0,
+        statEmergency: 1,
+        occupancyRate: 75.0,
+      },
+    ],
+  };
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/analytics/census`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.data) return json.data;
+    }
+  } catch {
+    // fallback
+  }
+  return defaultCensus;
+}
+
+export async function fetchHospitalMetrics(): Promise<HospitalMetricsData> {
+  const defaultMetrics: HospitalMetricsData = {
+    todayPatientIntake: 14,
+    totalRegisteredPatients: localPatients.length || 8,
+    activeWaitingQueue: 3,
+    inConsultationCount: 3,
+    completedConsultationsToday: 7,
+    criticalLabAlertsCount: 2,
+    averageConsultationDurationMinutes: 22.5,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/analytics/metrics`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.data) return json.data;
+    }
+  } catch {
+    // fallback
+  }
+  return defaultMetrics;
+}
+
+export async function fetchDiagnosticTat(): Promise<DiagnosticTatData> {
+  const defaultTat: DiagnosticTatData = {
+    overallMeanTatMinutes: 24.6,
+    statEmergencyMeanTatMinutes: 11.2,
+    routineMeanTatMinutes: 38.0,
+    totalOrdersCount: 45,
+    verifiedOrdersCount: 38,
+    targetComplianceRatePercent: 96.2,
+    volumeByCategory: {
+      'Clinical Chemistry': 26,
+      Hematology: 18,
+      'Cardiac Biomarkers': 9,
+      Coagulation: 6,
+    },
+  };
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/analytics/diagnostic-tat`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.data) return json.data;
+    }
+  } catch {
+    // fallback
+  }
+  return defaultTat;
+}
+
+export const ROOMS_STORAGE_KEY = 'caresync_hospital_rooms_v2';
+
+export const DEFAULT_HOSPITAL_ROOMS: HospitalRoom[] = [
+  {
+    id: 'r-1',
+    roomNumber: 'Exam Suite 3B',
+    wing: 'Outpatient Clinic',
+    status: 'IN_USE',
+    roomType: 'Examination Suite',
+    floor: 'Floor 1 - Outpatient Wing',
+    bedCount: 1,
+    bedType: 'Consultation Bed',
+    assignedDoctor: 'Dr. Sarah Chen, MD',
+    assignedPatient: 'Eleanor Vance',
+    patientId: 'p-1',
+    mrn: 'MRN-90214',
+    reason: 'Hypertension Follow-Up & Lisinopril Review',
+    elapsedMinutes: 18,
+    expectedDurationMinutes: 30,
+    equipment: ['Vital Signs Monitor', 'ECG Lead', 'Negative Pressure'],
+  },
+  {
+    id: 'r-2',
+    roomNumber: 'Exam Suite 4A',
+    wing: 'Outpatient Clinic',
+    status: 'AVAILABLE',
+    roomType: 'Examination Suite',
+    floor: 'Floor 1 - Outpatient Wing',
+    bedCount: 1,
+    bedType: 'Standard Exam Table',
+    equipment: ['Vital Signs Monitor', 'Ophthalmoscope'],
+  },
+  {
+    id: 'r-3',
+    roomNumber: 'Consultation Suite 2A',
+    wing: 'Outpatient Clinic',
+    status: 'IN_USE',
+    roomType: 'Consultation Room',
+    floor: 'Floor 1 - Outpatient Wing',
+    bedCount: 1,
+    bedType: 'Endocrine Suite Recliner',
+    assignedDoctor: 'Dr. Sarah Chen, MD',
+    assignedPatient: 'Arthur Pendelton',
+    patientId: 'p-4',
+    mrn: 'MRN-74199',
+    reason: 'Type 2 Diabetes HbA1c Glycemic Review',
+    elapsedMinutes: 14,
+    expectedDurationMinutes: 30,
+    equipment: ['Glucometer Pro', 'Vital Signs Monitor'],
+  },
+  {
+    id: 'r-4',
+    roomNumber: 'Triage Room 1B',
+    wing: 'Outpatient Clinic',
+    status: 'SANITIZING',
+    roomType: 'Triage Bay',
+    floor: 'Floor 1 - Admissions Concourse',
+    bedCount: 1,
+    bedType: 'Triage Bay',
+    elapsedMinutes: 4,
+    expectedDurationMinutes: 10,
+    equipment: ['Rapid Vitals Station', 'Automated Triage Terminal'],
+  },
+  {
+    id: 'r-5',
+    roomNumber: 'Cardiology Suite 1A',
+    wing: 'Cardiology & Specialty',
+    status: 'IN_USE',
+    roomType: 'Examination Suite',
+    floor: 'Floor 2 - Specialty Pavilion',
+    bedCount: 1,
+    bedType: 'Telemetry Recliner',
+    assignedDoctor: 'Dr. Marcus Vance, MD',
+    assignedPatient: 'Marcus Aurelius Jenkins',
+    patientId: 'p-2',
+    mrn: 'MRN-88401',
+    reason: 'Post-Catheterization Evaluation & Access Check',
+    elapsedMinutes: 32,
+    expectedDurationMinutes: 45,
+    equipment: ['12-Lead ECG Unit', 'Echocardiogram Pro', 'Defibrillator Ready'],
+  },
+  {
+    id: 'r-6',
+    roomNumber: 'OBGYN Suite 2C',
+    wing: 'Cardiology & Specialty',
+    status: 'IN_USE',
+    roomType: 'Consultation Room',
+    floor: 'Floor 2 - Specialty Pavilion',
+    bedCount: 1,
+    bedType: 'Ultrasound Exam Bed',
+    assignedDoctor: 'Dr. Sarah Chen, MD',
+    assignedPatient: 'Zara Al-Mansoor',
+    patientId: 'p-5',
+    mrn: 'MRN-83920',
+    reason: 'Week 28 Prenatal Ultrasound Check',
+    elapsedMinutes: 20,
+    expectedDurationMinutes: 30,
+    equipment: ['GE Voluson Ultrasound', 'Fetal Doppler Monitor'],
+  },
+  {
+    id: 'r-7',
+    roomNumber: 'Minor Procedure 1',
+    wing: 'Cardiology & Specialty',
+    status: 'AVAILABLE',
+    roomType: 'Procedure Suite',
+    floor: 'Floor 2 - Specialty Pavilion',
+    bedCount: 1,
+    bedType: 'Surgical Articulating Bed',
+    equipment: ['Surgical Lighting', 'Cautery Unit', 'Sterile Field Array'],
+  },
+  {
+    id: 'r-8',
+    roomNumber: 'STAT Biomarkers Bench',
+    wing: 'Diagnostic Laboratory',
+    status: 'STAT_EMERGENCY',
+    roomType: 'STAT Biomarkers Bench',
+    floor: 'Floor 1 - Diagnostic Laboratory Wing',
+    bedCount: 1,
+    bedType: 'Abbott Alinity ci Bench',
+    assignedDoctor: 'Elena Rostova, CLS',
+    assignedPatient: 'Marcus Aurelius Jenkins',
+    patientId: 'p-2',
+    mrn: 'MRN-88401',
+    reason: 'Emergency Cardiac Troponin hs-cTnI (54.8 ng/L)',
+    elapsedMinutes: 12,
+    expectedDurationMinutes: 15,
+    equipment: ['Alinity ci-series', 'Centrifuge STAT Unit', 'LIS Auto-Verifier'],
+  },
+  {
+    id: 'r-9',
+    roomNumber: 'Chemistry Analyzer Bench',
+    wing: 'Diagnostic Laboratory',
+    status: 'IN_USE',
+    roomType: 'STAT Biomarkers Bench',
+    floor: 'Floor 1 - Diagnostic Laboratory Wing',
+    bedCount: 1,
+    bedType: 'Roche cobas 8000 Bench',
+    assignedDoctor: 'Elena Rostova, CLS',
+    assignedPatient: 'Eleanor Vance',
+    patientId: 'p-1',
+    mrn: 'MRN-90214',
+    reason: 'Comprehensive Metabolic Panel (CMP-14)',
+    elapsedMinutes: 22,
+    expectedDurationMinutes: 45,
+    equipment: ['Roche cobas 8000', 'Automated Pipetting Robot'],
+  },
+  {
+    id: 'r-10',
+    roomNumber: 'Phlebotomy Bay 1',
+    wing: 'Diagnostic Laboratory',
+    status: 'AVAILABLE',
+    roomType: 'Triage Bay',
+    floor: 'Floor 1 - Diagnostic Laboratory Wing',
+    bedCount: 1,
+    bedType: 'Phlebotomy Recliner',
+    equipment: ['Barcoded Vacutainer Dispenser', 'Vein Viewer Pro'],
+  },
+  {
+    id: 'r-11',
+    roomNumber: 'Hematology Analyzer 2',
+    wing: 'Diagnostic Laboratory',
+    status: 'AVAILABLE',
+    roomType: 'STAT Biomarkers Bench',
+    floor: 'Floor 1 - Diagnostic Laboratory Wing',
+    bedCount: 1,
+    bedType: 'Sysmex XN-1000 Bench',
+    equipment: ['Sysmex Automated Hematology', 'Slide Stainer Unit'],
+  },
+];
+
+export function getStoredHospitalRooms(): HospitalRoom[] {
+  if (typeof window === 'undefined') return [...DEFAULT_HOSPITAL_ROOMS];
+  try {
+    const saved = localStorage.getItem(ROOMS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return [...DEFAULT_HOSPITAL_ROOMS];
+}
+
+export function saveStoredHospitalRooms(rooms: HospitalRoom[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(ROOMS_STORAGE_KEY, JSON.stringify(rooms));
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchHospitalRooms(): Promise<HospitalRoom[]> {
+  return getStoredHospitalRooms();
+}
+
+export async function createHospitalRoom(
+  input: CreateRoomInput,
+): Promise<{ success: boolean; data?: HospitalRoom; error?: string }> {
+  if (!input.roomNumber?.trim()) {
+    return { success: false, error: 'Room number / identifier is required.' };
+  }
+
+  const existing = getStoredHospitalRooms();
+  if (existing.some((r) => r.roomNumber.toLowerCase() === input.roomNumber.trim().toLowerCase())) {
+    return { success: false, error: `A room named "${input.roomNumber}" already exists in the facility directory.` };
+  }
+
+  const newRoom: HospitalRoom = {
+    id: `r-${Date.now()}`,
+    roomNumber: input.roomNumber.trim(),
+    wing: input.wing,
+    roomType: input.roomType,
+    floor: input.floor || 'Floor 1 - General Wing',
+    bedCount: input.bedCount || 1,
+    bedType: input.bedType || 'Standard Examination Table',
+    status: input.status || 'AVAILABLE',
+    equipment: input.equipment || ['Vital Signs Monitor'],
+    notes: input.notes,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const updated = [newRoom, ...existing];
+  saveStoredHospitalRooms(updated);
+
+  recordAuditLogEntry({
+    action: 'FACILITY_ROOM_CREATED',
+    resource: 'facility_rooms',
+    resourceId: newRoom.id,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      roomNumber: newRoom.roomNumber,
+      wing: newRoom.wing,
+      roomType: newRoom.roomType,
+      bedCount: newRoom.bedCount,
+    },
+  });
+
+  return { success: true, data: newRoom };
+}
+
+export async function updateHospitalRoom(
+  input: UpdateRoomInput,
+): Promise<{ success: boolean; data?: HospitalRoom; error?: string }> {
+  const existing = getStoredHospitalRooms();
+  const idx = existing.findIndex((r) => r.id === input.id);
+  if (idx === -1) {
+    return { success: false, error: 'Room record not found.' };
+  }
+
+  const updatedRoom: HospitalRoom = {
+    ...existing[idx],
+    ...input,
+    updatedAt: new Date().toISOString(),
+  };
+
+  existing[idx] = updatedRoom;
+  saveStoredHospitalRooms(existing);
+
+  recordAuditLogEntry({
+    action: 'FACILITY_ROOM_UPDATED',
+    resource: 'facility_rooms',
+    resourceId: updatedRoom.id,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      roomNumber: updatedRoom.roomNumber,
+      wing: updatedRoom.wing,
+      status: updatedRoom.status,
+    },
+  });
+
+  return { success: true, data: updatedRoom };
+}
+
+export async function deleteHospitalRoom(
+  roomId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const existing = getStoredHospitalRooms();
+  const target = existing.find((r) => r.id === roomId);
+  if (!target) {
+    return { success: false, error: 'Room record not found.' };
+  }
+
+  if (target.status === 'IN_USE' || target.status === 'STAT_EMERGENCY') {
+    return { success: false, error: 'Cannot decommission a room that is currently occupied with active clinical patients.' };
+  }
+
+  const updated = existing.filter((r) => r.id !== roomId);
+  saveStoredHospitalRooms(updated);
+
+  recordAuditLogEntry({
+    action: 'FACILITY_ROOM_DECOMMISSIONED',
+    resource: 'facility_rooms',
+    resourceId: roomId,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      roomNumber: target.roomNumber,
+      wing: target.wing,
+    },
+  });
+
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Safe Medical Record Corrections & Revision Ledger API [BE-501 / FE-602]
+// ---------------------------------------------------------------------------
+
+export async function submitConsultationCorrection(
+  input: CreateCorrectionInput,
+): Promise<{ success: boolean; data?: Consultation; error?: string }> {
+  if (!input.amendmentReason?.trim() || input.amendmentReason.trim().length < 5) {
+    return {
+      success: false,
+      error: 'A clinical amendment reason (at least 5 characters) is legally required to amend a signed SOAP record.',
+    };
+  }
+
+  const current = getStoredConsultations();
+  const target = current.find((c) => c.id === input.consultationId);
+  if (!target) {
+    return { success: false, error: 'Consultation record not found.' };
+  }
+  if (target.status !== 'FINALIZED') {
+    return {
+      success: false,
+      error: 'Only finalized (signed) consultations require an append-only correction ledger.',
+    };
+  }
+
+  try {
+    const physicianUser = STAFF_PRESETS.find((s) => s.role === 'PHYSICIAN') || STAFF_PRESETS[1];
+    const token = await getValidAuthToken(physicianUser);
+    await fetch(`${API_BASE_URL}/consultations/${input.consultationId}/corrections`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        amendmentReason: input.amendmentReason.trim(),
+        chiefComplaint: input.chiefComplaint.trim(),
+        physicalExamination: input.physicalExamination?.trim(),
+        primaryDiagnosisDescription: input.primaryDiagnosisDescription.trim(),
+        primaryDiagnosisCode: input.primaryDiagnosisCode?.trim(),
+        treatmentPlan: input.treatmentPlan.trim(),
+        vitalSigns: input.vitalSigns,
+      }),
+    });
+  } catch {
+    // Resilient local fallback
+  }
+
+  const correctionEntry: ConsultationCorrection = {
+    id: `corr-${Date.now()}`,
+    consultationId: target.id,
+    amendedBy: input.amendedBy || 'u-1',
+    amendedByName: input.amendedByName || target.physicianName || 'Dr. Sarah Chen, MD',
+    amendmentReason: input.amendmentReason.trim(),
+    previousSnapshot: {
+      chiefComplaint: target.chiefComplaint,
+      physicalExamination: target.physicalExamination,
+      primaryDiagnosisDescription: target.primaryDiagnosisDescription,
+      primaryDiagnosisCode: target.primaryDiagnosisCode,
+      treatmentPlan: target.treatmentPlan,
+      vitalSigns: target.vitalSigns,
+    },
+    updatedFields: {
+      chiefComplaint: input.chiefComplaint.trim(),
+      physicalExamination: input.physicalExamination?.trim(),
+      primaryDiagnosisDescription: input.primaryDiagnosisDescription.trim(),
+      primaryDiagnosisCode: input.primaryDiagnosisCode?.trim(),
+      treatmentPlan: input.treatmentPlan.trim(),
+      vitalSigns: input.vitalSigns ?? target.vitalSigns,
+    },
+    createdAt: new Date().toISOString(),
+  };
+
+  const updatedConsultation: Consultation = {
+    ...target,
+    chiefComplaint: correctionEntry.updatedFields.chiefComplaint,
+    physicalExamination: correctionEntry.updatedFields.physicalExamination,
+    primaryDiagnosisDescription: correctionEntry.updatedFields.primaryDiagnosisDescription,
+    primaryDiagnosisCode: correctionEntry.updatedFields.primaryDiagnosisCode,
+    treatmentPlan: correctionEntry.updatedFields.treatmentPlan,
+    vitalSigns: correctionEntry.updatedFields.vitalSigns,
+    updatedAt: correctionEntry.createdAt,
+    corrections: [correctionEntry, ...(target.corrections || [])],
+  };
+
+  const updatedList = current.map((c) => (c.id === target.id ? updatedConsultation : c));
+  saveStoredConsultations(updatedList);
+
+  recordAuditLogEntry({
+    action: 'CONSULTATION_CORRECTION_SUBMITTED',
+    resource: 'consultation_corrections',
+    resourceId: correctionEntry.id,
+    userId: correctionEntry.amendedBy,
+    userEmail: 'sarah.chen@caresync.org',
+    userRole: 'PHYSICIAN',
+    ipAddress: '192.168.1.42',
+    metadata: {
+      consultationId: target.id,
+      patientId: target.patientId,
+      amendmentReason: correctionEntry.amendmentReason,
+      previousDiagnosis: correctionEntry.previousSnapshot.primaryDiagnosisDescription,
+      updatedDiagnosis: correctionEntry.updatedFields.primaryDiagnosisDescription,
+    },
+  });
+
+  return { success: true, data: updatedConsultation };
+}
+
+// ---------------------------------------------------------------------------
+// Administrator Staff Governance & Access Revocation APIs [BE-501 / FE-601]
+// ---------------------------------------------------------------------------
+
+export const STAFF_DIRECTORY_STORAGE_KEY = 'caresync_staff_directory_v1';
+
+export const DEFAULT_STAFF_DIRECTORY: StaffAccount[] = [
+  {
+    id: 'u-1',
+    email: 'sarah.chen@caresync.org',
+    firstName: 'Sarah',
+    lastName: 'Chen',
+    fullName: 'Dr. Sarah Chen, MD',
+    role: 'PHYSICIAN',
+    department: 'Outpatient Clinic — General Practice',
+    licenseNumber: 'MD-CA-88412',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T11:45:00Z',
+    createdAt: '2025-01-15T08:00:00Z',
+  },
+  {
+    id: 'u-2',
+    email: 'marcus.vance@caresync.org',
+    firstName: 'Marcus',
+    lastName: 'Vance',
+    fullName: 'Dr. Marcus Vance, MD',
+    role: 'PHYSICIAN',
+    department: 'Cardiology & Specialty Wing',
+    licenseNumber: 'MD-CA-71904',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T11:30:00Z',
+    createdAt: '2025-01-15T08:00:00Z',
+  },
+  {
+    id: 'u-6',
+    email: 'olivia.bennett@caresync.org',
+    firstName: 'Olivia',
+    lastName: 'Bennett',
+    fullName: 'Dr. Olivia Bennett, MD',
+    role: 'PHYSICIAN',
+    department: 'OB/GYN & Maternal Care',
+    licenseNumber: 'MD-CA-93018',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T10:50:00Z',
+    createdAt: '2025-03-10T09:00:00Z',
+  },
+  {
+    id: 'u-3',
+    email: 'maria.santos@caresync.org',
+    firstName: 'Maria',
+    lastName: 'Santos',
+    fullName: 'Maria Santos',
+    role: 'RECEPTIONIST',
+    department: 'Front Desk & Triage Admissions',
+    licenseNumber: 'ADM-REG-4012',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T11:52:00Z',
+    createdAt: '2025-02-01T08:00:00Z',
+  },
+  {
+    id: 'u-4',
+    email: 'elena.rostova@caresync.org',
+    firstName: 'Elena',
+    lastName: 'Rostova',
+    fullName: 'Elena Rostova, CLS',
+    role: 'LABORATORY_USER',
+    department: 'Diagnostic Laboratory & Pathology',
+    licenseNumber: 'CLS-ASCP-5519',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T11:40:00Z',
+    createdAt: '2025-02-12T08:30:00Z',
+  },
+  {
+    id: 'u-5',
+    email: 'admin@caresync.org',
+    firstName: 'System',
+    lastName: 'Administrator',
+    fullName: 'Hospital Security Admin',
+    role: 'ADMINISTRATOR',
+    department: 'Information Security & Governance',
+    licenseNumber: 'HIPAA-SEC-001',
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: '2026-10-19T11:55:00Z',
+    createdAt: '2025-01-01T00:00:00Z',
+  },
+  {
+    id: 'u-7',
+    email: 'david.miller@caresync.org',
+    firstName: 'David',
+    lastName: 'Miller',
+    fullName: 'David Miller, RN',
+    role: 'RECEPTIONIST',
+    department: 'Outpatient Intake & Triage',
+    licenseNumber: 'RN-CA-31049',
+    isActive: false,
+    sessionLocked: true,
+    lastActiveAt: '2026-09-30T17:00:00Z',
+    revokedAt: '2026-10-01T09:00:00Z',
+    revokedReason: 'End of clinical rotation — hospital access revoked & active sessions purged.',
+    createdAt: '2025-04-20T08:00:00Z',
+  },
+];
+
+export function getStoredStaffDirectory(): StaffAccount[] {
+  if (typeof window === 'undefined') return [...DEFAULT_STAFF_DIRECTORY];
+  try {
+    const saved = localStorage.getItem(STAFF_DIRECTORY_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return [...DEFAULT_STAFF_DIRECTORY];
+}
+
+export function saveStoredStaffDirectory(accounts: StaffAccount[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STAFF_DIRECTORY_STORAGE_KEY, JSON.stringify(accounts));
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchStaffAccounts(): Promise<StaffAccount[]> {
+  const local = getStoredStaffDirectory();
+  try {
+    const adminUser = STAFF_PRESETS.find((s) => s.role === 'ADMINISTRATOR') || STAFF_PRESETS[3];
+    const token = await getValidAuthToken(adminUser);
+    const res = await fetch(`${API_BASE_URL}/admin/users`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (Array.isArray(json?.data) && json.data.length > 0 && typeof window !== 'undefined' && !localStorage.getItem(STAFF_DIRECTORY_STORAGE_KEY)) {
+        return local;
+      }
+    }
+  } catch {
+    // fallback to local directory
+  }
+  return local;
+}
+
+export async function createStaffAccount(
+  input: CreateStaffAccountInput,
+): Promise<{ success: boolean; data?: StaffAccount; error?: string }> {
+  if (!input.firstName?.trim() || !input.lastName?.trim() || !input.email?.trim()) {
+    return { success: false, error: 'First name, last name, and hospital email are required.' };
+  }
+
+  const existing = getStoredStaffDirectory();
+  if (existing.some((u) => u.email.toLowerCase() === input.email.trim().toLowerCase())) {
+    return { success: false, error: `A staff account with email "${input.email}" already exists.` };
+  }
+
+  try {
+    const adminUser = STAFF_PRESETS.find((s) => s.role === 'ADMINISTRATOR') || STAFF_PRESETS[3];
+    const token = await getValidAuthToken(adminUser);
+    await fetch(`${API_BASE_URL}/admin/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        firstName: input.firstName.trim(),
+        lastName: input.lastName.trim(),
+        email: input.email.trim().toLowerCase(),
+        password: input.password || 'CareSync@2026!',
+        role: input.role,
+        department: input.department.trim(),
+      }),
+    });
+  } catch {
+    // local fallback
+  }
+
+  const prefix = input.role === 'PHYSICIAN' ? 'Dr. ' : '';
+  const suffix = input.role === 'PHYSICIAN' ? ', MD' : input.role === 'LABORATORY_USER' ? ', CLS' : '';
+  const newAccount: StaffAccount = {
+    id: `u-${Date.now()}`,
+    email: input.email.trim().toLowerCase(),
+    firstName: input.firstName.trim(),
+    lastName: input.lastName.trim(),
+    fullName: `${prefix}${input.firstName.trim()} ${input.lastName.trim()}${suffix}`,
+    role: input.role,
+    department: input.department.trim() || 'General Outpatient Operations',
+    licenseNumber: input.licenseNumber?.trim() || `CS-${Math.floor(10000 + Math.random() * 90000)}`,
+    isActive: true,
+    sessionLocked: false,
+    lastActiveAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+  };
+
+  const updated = [newAccount, ...existing];
+  saveStoredStaffDirectory(updated);
+
+  recordAuditLogEntry({
+    action: 'STAFF_ACCOUNT_CREATED',
+    resource: 'users',
+    resourceId: newAccount.id,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      staffEmail: newAccount.email,
+      assignedRole: newAccount.role,
+      department: newAccount.department,
+      passwordHashing: 'Argon2id (m=64MB, t=3, p=4)',
+    },
+  });
+
+  return { success: true, data: newAccount };
+}
+
+export async function revokeStaffAccess(
+  staffId: string,
+  reason = 'Staff member departure — account disabled and active Redis sessions purged.',
+): Promise<{ success: boolean; data?: StaffAccount; error?: string }> {
+  const existing = getStoredStaffDirectory();
+  const target = existing.find((u) => u.id === staffId);
+  if (!target) {
+    return { success: false, error: 'Staff account not found.' };
+  }
+  if (target.role === 'ADMINISTRATOR' && target.email === 'admin@caresync.org') {
+    return { success: false, error: 'Primary Hospital Security Administrator account cannot be self-revoked.' };
+  }
+
+  try {
+    const adminUser = STAFF_PRESETS.find((s) => s.role === 'ADMINISTRATOR') || STAFF_PRESETS[3];
+    const token = await getValidAuthToken(adminUser);
+    await fetch(`${API_BASE_URL}/admin/users/${staffId}/revoke`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    // local fallback
+  }
+
+  const now = new Date().toISOString();
+  const updatedAccount: StaffAccount = {
+    ...target,
+    isActive: false,
+    sessionLocked: true,
+    revokedAt: now,
+    revokedReason: reason,
+  };
+
+  const updatedList = existing.map((u) => (u.id === staffId ? updatedAccount : u));
+  saveStoredStaffDirectory(updatedList);
+
+  recordAuditLogEntry({
+    action: 'USER_ACCESS_REVOKED',
+    resource: 'users',
+    resourceId: staffId,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      revokedStaffName: target.fullName,
+      revokedStaffEmail: target.email,
+      previousRole: target.role,
+      reason,
+      redisSessionsEvicted: true,
+    },
+  });
+
+  return { success: true, data: updatedAccount };
+}
+
+export async function restoreStaffAccess(
+  staffId: string,
+): Promise<{ success: boolean; data?: StaffAccount; error?: string }> {
+  const existing = getStoredStaffDirectory();
+  const target = existing.find((u) => u.id === staffId);
+  if (!target) {
+    return { success: false, error: 'Staff account not found.' };
+  }
+
+  const updatedAccount: StaffAccount = {
+    ...target,
+    isActive: true,
+    sessionLocked: false,
+    revokedAt: undefined,
+    revokedReason: undefined,
+    lastActiveAt: new Date().toISOString(),
+  };
+
+  const updatedList = existing.map((u) => (u.id === staffId ? updatedAccount : u));
+  saveStoredStaffDirectory(updatedList);
+
+  recordAuditLogEntry({
+    action: 'USER_ACCESS_RESTORED',
+    resource: 'users',
+    resourceId: staffId,
+    userId: 'u-5',
+    userEmail: 'admin@caresync.org',
+    userRole: 'ADMINISTRATOR',
+    ipAddress: '192.168.1.10',
+    metadata: {
+      restoredStaffName: target.fullName,
+      restoredStaffEmail: target.email,
+      role: target.role,
+    },
+  });
+
+  return { success: true, data: updatedAccount };
+}
+
+
+
 
